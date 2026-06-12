@@ -1,10 +1,23 @@
-﻿# -*- coding: utf-8 -*-
-from sqlalchemy import create_engine, Column, String, Text, DateTime, Float, event
-from sqlalchemy.orm import declarative_base, sessionmaker
+# -*- coding: utf-8 -*-
+from sqlalchemy import (
+    create_engine, Column, String, Text, DateTime, Float, Integer, ForeignKey, event
+)
+from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from datetime import datetime, timezone
 from config import settings
 
 Base = declarative_base()
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(32), unique=True, nullable=False, index=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
 
 class Project(Base):
     __tablename__ = "projects"
@@ -21,13 +34,16 @@ class Project(Base):
     error_msg = Column(Text, default="")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    owner = relationship("User", backref="projects")
+
 
 engine = create_engine(
     f"sqlite:///{settings.db_path}",
     connect_args={"check_same_thread": False, "timeout": 30}
 )
 
-# Enable WAL mode for concurrent reads during writes
+
 @event.listens_for(engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
     cursor = dbapi_connection.cursor()
@@ -35,10 +51,23 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
     cursor.execute("PRAGMA busy_timeout=5000")
     cursor.close()
 
+
 SessionLocal = sessionmaker(bind=engine)
 
+
 def init_db():
+    from sqlalchemy import inspect, text
+    inspector = inspect(engine)
+    has_users = inspector.has_table("users")
     Base.metadata.create_all(bind=engine)
+    if not has_users:
+        with engine.begin() as conn:
+            cols = [c["name"] for c in inspector.get_columns("projects")]
+            if "user_id" not in cols:
+                conn.execute(text("ALTER TABLE projects ADD COLUMN user_id INTEGER"))
+            conn.execute(text("DELETE FROM projects"))
+            conn.execute(text("DELETE FROM sqlite_sequence WHERE name='projects'"))
+
 
 def get_db():
     db = SessionLocal()
