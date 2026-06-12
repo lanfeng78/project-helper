@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from sqlalchemy import (
-    create_engine, Column, String, Text, DateTime, Float, Integer, ForeignKey, event
+    create_engine, inspect, text,
+    Column, String, Text, DateTime, Float, Integer, ForeignKey, event,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from datetime import datetime, timezone
@@ -56,13 +57,16 @@ SessionLocal = sessionmaker(bind=engine)
 
 
 def init_db():
-    from sqlalchemy import inspect, text
     inspector = inspect(engine)
     has_users = inspector.has_table("users")
     Base.metadata.create_all(bind=engine)
-    if not has_users:
+    # 重新创建 inspector，确保 schema 状态在 create_all 之后是最新的。
+    inspector_after = inspect(engine)
+    if not has_users and inspector_after.has_table("projects"):
+        # 首次引入用户系统——按设计文档决策（spec 3.2），清空历史项目数据。
+        # 旧项目无 user_id 归属，无法迁移到新 schema。
         with engine.begin() as conn:
-            cols = [c["name"] for c in inspector.get_columns("projects")]
+            cols = [c["name"] for c in inspector_after.get_columns("projects")]
             if "user_id" not in cols:
                 conn.execute(text("ALTER TABLE projects ADD COLUMN user_id INTEGER"))
             conn.execute(text("DELETE FROM projects"))

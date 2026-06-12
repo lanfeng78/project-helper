@@ -9,6 +9,13 @@ from models import Base, get_db
 from main import app
 
 
+@pytest.fixture(autouse=True)
+def _disable_init_db(monkeypatch):
+    """Stop lifespan from touching the production DB file during tests."""
+    monkeypatch.setattr("main.init_db", lambda: None)
+    yield
+
+
 @pytest.fixture
 def db_session():
     engine = create_engine(
