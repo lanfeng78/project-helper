@@ -1,7 +1,34 @@
-﻿const BASE = '/api'
+import { useAuthStore } from '@/stores/auth'
+import router from '@/router'
+
+const BASE = '/api'
+
+export async function authedFetch(url, options = {}) {
+  const auth = useAuthStore()
+  const headers = { ...(options.headers || {}) }
+
+  if (auth.accessToken) {
+    headers['Authorization'] = `Bearer ${auth.accessToken}`
+  }
+
+  let res = await fetch(url, { ...options, headers })
+
+  if (res.status === 401 && auth.refreshToken) {
+    const ok = await auth.tryRefresh()
+    if (ok) {
+      headers['Authorization'] = `Bearer ${auth.accessToken}`
+      res = await fetch(url, { ...options, headers })
+    } else {
+      router.push('/login')
+      throw new Error('会话已过期，请重新登录')
+    }
+  }
+
+  return res
+}
 
 export async function analyzeRepo(repoUrl) {
-  const res = await fetch(`${BASE}/analyze`, {
+  const res = await authedFetch(`${BASE}/analyze`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ repo_url: repoUrl })
@@ -14,7 +41,8 @@ export async function analyzeRepo(repoUrl) {
 }
 
 export function subscribeProgress(projectId, onProgress, onDone, onError) {
-  const url = `${BASE}/progress/${projectId}`
+  const auth = useAuthStore()
+  const url = `${BASE}/progress/${projectId}?token=${encodeURIComponent(auth.accessToken)}`
   let reconnectAttempts = 0
   const MAX_RECONNECT = 3
   let es = null
@@ -30,7 +58,6 @@ export function subscribeProgress(projectId, onProgress, onDone, onError) {
     })
 
     es.addEventListener('keepalive', () => {
-      // Connection is alive, reset reconnect counter
       reconnectAttempts = 0
     })
 
@@ -54,7 +81,6 @@ export function subscribeProgress(projectId, onProgress, onDone, onError) {
         }
       } catch {}
 
-      // Try reconnect
       reconnectAttempts++
       if (reconnectAttempts <= MAX_RECONNECT) {
         setTimeout(connect, 2000)
@@ -64,9 +90,7 @@ export function subscribeProgress(projectId, onProgress, onDone, onError) {
       }
     })
 
-    es.onerror = () => {
-      // Let the 'error' event handler deal with this
-    }
+    es.onerror = () => {}
   }
 
   connect()
@@ -76,7 +100,7 @@ export function subscribeProgress(projectId, onProgress, onDone, onError) {
 }
 
 export async function getReport(projectId) {
-  const res = await fetch(`${BASE}/report/${projectId}`)
+  const res = await authedFetch(`${BASE}/report/${projectId}`)
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Report not found' }))
     throw new Error(err.detail || 'Report not found')
@@ -85,18 +109,28 @@ export async function getReport(projectId) {
 }
 
 export async function listProjects() {
-  const res = await fetch(`${BASE}/projects`)
+  const res = await authedFetch(`${BASE}/projects`)
   return res.json()
 }
 
 export async function streamQA(projectId, question, conversation, onToken, onDone, onError) {
+  const auth = useAuthStore()
   try {
     const res = await fetch(`${BASE}/qa`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${auth.accessToken}`
+      },
       body: JSON.stringify({ project_id: projectId, question, conversation })
     })
-    if (!res.ok) throw new Error('QA failed')
+    if (!res.ok) {
+      if (res.status === 401) {
+        const ok = await auth.tryRefresh()
+        if (ok) return streamQA(projectId, question, conversation, onToken, onDone, onError)
+      }
+      throw new Error('QA failed')
+    }
     const reader = res.body.getReader()
     const decoder = new TextDecoder()
     while (true) {
@@ -109,8 +143,9 @@ export async function streamQA(projectId, question, conversation, onToken, onDon
     onError(e.message)
   }
 }
+
 export async function deleteProject(projectId) {
-  const res = await fetch(`${BASE}/projects/${projectId}`, { method: 'DELETE' })
+  const res = await authedFetch(`${BASE}/projects/${projectId}`, { method: 'DELETE' })
   if (!res.ok) throw new Error('Delete failed')
   return res.json()
 }
