@@ -23,9 +23,11 @@ def get_current_user(
 
 
 def get_current_user_sse(
-    token: str = Query(...),
+    token: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> User:
+    if not token:
+        raise HTTPException(401, "missing token")
     user_id = decode_token(token, expected_type="access")
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
