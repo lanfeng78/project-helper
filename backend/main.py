@@ -1,8 +1,7 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 import json
 import asyncio
 import threading
-import time
 from pathlib import Path
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -22,14 +21,15 @@ from qa_engine import answer_question
 from auth import router as auth_router
 from dependencies import get_current_user, get_current_user_sse
 
-# ---- Lifespan ----
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
     Path(settings.repos_dir).mkdir(parents=True, exist_ok=True)
     yield
 
-app = FastAPI(title="Project Helper", version="1.0.0", lifespan=lifespan)
+
+app = FastAPI(title="Project Helper", version="1.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -41,29 +41,34 @@ app.add_middleware(
 
 app.include_router(auth_router)
 
-# ---- Schemas ----
+
 class AnalyzeRequest(BaseModel):
     repo_url: str
+
 
 class QARequest(BaseModel):
     project_id: str
     question: str
     conversation: list[dict] = []
 
-# ---- In-memory progress store ----
+
 progress_store: dict[str, dict] = {}
 
-# ---- Routes ----
+
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
 
+
 @app.post("/api/analyze")
-async def analyze(req: AnalyzeRequest, db: Session = Depends(get_db)):
+async def analyze(
+    req: AnalyzeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Start analysis of a GitHub repo. Returns immediately with project_id."""
     pid = repo_id(req.repo_url)
 
-    # Check cache
     existing = db.query(Project).filter(Project.id == pid).first()
     if existing and existing.status == "done":
         return {
@@ -74,33 +79,48 @@ async def analyze(req: AnalyzeRequest, db: Session = Depends(get_db)):
             "report_markdown": existing.report_markdown,
         }
 
-    # Create or reset record
     if existing:
         existing.status = "pending"
         existing.progress = 0.0
         existing.progress_msg = "准备分析..."
         existing.error_msg = ""
+        existing.user_id = current_user.id
     else:
         existing = Project(
             id=pid,
             repo_url=req.repo_url,
             repo_name=req.repo_url.rstrip("/").split("/")[-1],
             status="pending",
+            user_id=current_user.id,
         )
         db.add(existing)
     db.commit()
 
     progress_store[pid] = {"progress": 0, "msg": "正在准备..."}
 
-    # Run analysis in background thread
-    thread = threading.Thread(target=_run_analysis, args=(pid, req.repo_url), daemon=True)
+    thread = threading.Thread(
+        target=_run_analysis,
+        args=(pid, req.repo_url, current_user.id),
+        daemon=True,
+    )
     thread.start()
 
     return {"project_id": pid, "status": "pending", "cached": False}
 
+
 @app.get("/api/progress/{project_id}")
-async def progress(project_id: str):
+async def progress(
+    project_id: str,
+    current_user: User = Depends(get_current_user_sse),
+    db: Session = Depends(get_db),
+):
     """SSE endpoint for real-time progress with keepalive pings."""
+    proj = db.query(Project).filter(Project.id == project_id).first()
+    if not proj:
+        raise HTTPException(404, "项目不存在")
+    if proj.user_id != current_user.id:
+        raise HTTPException(403, "无权访问此项目")
+
     async def event_stream():
         last_progress = -1
         last_msg = ""
@@ -111,7 +131,6 @@ async def progress(project_id: str):
             pct = data.get("progress", 0)
             msg = data.get("msg", "")
 
-            # Send progress update when it changes
             if pct != last_progress or msg != last_msg:
                 last_progress = pct
                 last_msg = msg
@@ -122,7 +141,6 @@ async def progress(project_id: str):
                 }
             else:
                 silent_count += 1
-                # Send keepalive every ~15 iterations (7.5 seconds) to prevent timeout
                 if silent_count >= 15:
                     silent_count = 0
                     yield {
@@ -130,13 +148,11 @@ async def progress(project_id: str):
                         "data": json.dumps({"progress": pct, "msg": msg}, ensure_ascii=False)
                     }
 
-            # Check completion
             if data.get("done"):
                 yield {
                     "event": "done",
                     "data": json.dumps({"progress": 100, "msg": "分析完成!"}, ensure_ascii=False)
                 }
-                # Stay alive briefly so client can receive
                 await asyncio.sleep(0.5)
                 break
 
@@ -152,12 +168,19 @@ async def progress(project_id: str):
 
     return EventSourceResponse(event_stream())
 
+
 @app.get("/api/report/{project_id}")
-def get_report(project_id: str, db: Session = Depends(get_db)):
+def get_report(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Get the analysis report for a project."""
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj:
-        raise HTTPException(404, "Project not found")
+        raise HTTPException(404, "项目不存在")
+    if proj.user_id != current_user.id:
+        raise HTTPException(403, "无权访问此项目")
     if proj.status == "error":
         raise HTTPException(400, proj.error_msg or "分析失败")
     if proj.status != "done":
@@ -172,13 +195,20 @@ def get_report(project_id: str, db: Session = Depends(get_db)):
         "report_markdown": proj.report_markdown,
     }
 
+
 @app.delete("/api/projects/{project_id}")
-def delete_project(project_id: str, db: Session = Depends(get_db)):
+def delete_project(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Delete a cached project and its repo files."""
     import shutil
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj:
-        raise HTTPException(404, "Project not found")
+        raise HTTPException(404, "项目不存在")
+    if proj.user_id != current_user.id:
+        raise HTTPException(403, "无权访问此项目")
     db.delete(proj)
     db.commit()
     repo_path = Path(settings.repos_dir) / project_id
@@ -186,12 +216,16 @@ def delete_project(project_id: str, db: Session = Depends(get_db)):
         shutil.rmtree(repo_path, ignore_errors=True)
     return {"deleted": project_id}
 
+
 @app.get("/api/projects")
-def list_projects(db: Session = Depends(get_db)):
-    """List all cached/completed projects."""
+def list_projects(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List current user's cached/completed projects."""
     projects = (
         db.query(Project)
-        .filter(Project.status == "done")
+        .filter(Project.user_id == current_user.id, Project.status == "done")
         .order_by(Project.updated_at.desc())
         .limit(20)
         .all()
@@ -207,11 +241,20 @@ def list_projects(db: Session = Depends(get_db)):
         for p in projects
     ]
 
+
 @app.post("/api/qa")
-async def qa(req: QARequest, db: Session = Depends(get_db)):
+async def qa(
+    req: QARequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Streaming Q&A about a project's source code."""
     proj = db.query(Project).filter(Project.id == req.project_id).first()
-    if not proj or proj.status != "done":
+    if not proj:
+        raise HTTPException(404, "项目不存在")
+    if proj.user_id != current_user.id:
+        raise HTTPException(403, "无权访问此项目")
+    if proj.status != "done":
         raise HTTPException(400, "Project not analyzed yet")
 
     repo_path = Path(settings.repos_dir) / req.project_id
@@ -235,15 +278,14 @@ async def qa(req: QARequest, db: Session = Depends(get_db)):
         }
     )
 
-# ---- Background analysis runner ----
-def _run_analysis(pid: str, repo_url: str):
+
+def _run_analysis(pid: str, repo_url: str, user_id: int):
     """Run the full analysis pipeline in a background thread."""
     from models import SessionLocal
     db = SessionLocal()
     try:
         def update(pct: float, msg: str):
             progress_store[pid] = {"progress": round(pct * 100, 1), "msg": msg}
-            # Only commit to DB at major milestones to avoid lock contention
             if pct >= 1.0 or pct <= 0.02 or int(pct * 100) % 25 == 0:
                 proj = db.query(Project).filter(Project.id == pid).first()
                 if proj:
@@ -256,7 +298,6 @@ def _run_analysis(pid: str, repo_url: str):
         try:
             files, context = fetch_via_api(repo_url, progress_cb=update)
         except Exception as api_err:
-            # Fallback to git clone if API fails
             update(0.01, f"API 模式失败: {api_err}，尝试 git clone...")
             repo_path = clone_repo(repo_url, progress_cb=update)
             files = scan_codebase(repo_path, progress_cb=update)
@@ -296,6 +337,7 @@ def _run_analysis(pid: str, repo_url: str):
 
     finally:
         db.close()
+
 
 if __name__ == "__main__":
     import uvicorn
