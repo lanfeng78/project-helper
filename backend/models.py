@@ -71,7 +71,9 @@ def init_db():
             if "user_id" not in cols:
                 conn.execute(text("ALTER TABLE projects ADD COLUMN user_id INTEGER"))
             conn.execute(text("DELETE FROM projects"))
-            conn.execute(text("DELETE FROM sqlite_sequence WHERE name='projects'"))
+            # sqlite_sequence 只有在表有过 autoincrement 插入后才存在
+            if inspector_after.has_table("sqlite_sequence"):
+                conn.execute(text("DELETE FROM sqlite_sequence WHERE name='projects'"))
 
 
 def get_db():
