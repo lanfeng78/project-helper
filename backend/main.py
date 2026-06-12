@@ -15,10 +15,12 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from config import settings
-from models import init_db, get_db, Project
+from models import init_db, get_db, Project, User
 from repo_manager import repo_id, clone_repo, scan_codebase, build_context_summary, fetch_via_api
 from analyzer import analyze_codebase, build_markdown_report
 from qa_engine import answer_question
+from auth import router as auth_router
+from dependencies import get_current_user, get_current_user_sse
 
 # ---- Lifespan ----
 @asynccontextmanager
@@ -36,6 +38,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(auth_router)
 
 # ---- Schemas ----
 class AnalyzeRequest(BaseModel):
