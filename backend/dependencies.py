@@ -12,7 +12,9 @@ def get_current_user(
 ) -> User:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "missing or invalid Authorization header")
-    token = authorization[7:]
+    token = authorization[7:].strip()
+    if not token:
+        raise HTTPException(401, "missing or invalid Authorization header")
     user_id = decode_token(token, expected_type="access")
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
