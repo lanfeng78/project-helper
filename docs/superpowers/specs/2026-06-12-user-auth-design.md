@@ -197,7 +197,7 @@ def get_current_user_sse(
 |------|------|--------|------|-----------|
 | POST | `/api/auth/register` | `{username, email, password}` | `{user, access_token, refresh_token}` | 201 |
 | POST | `/api/auth/login` | `{email, password}` | `{user, access_token, refresh_token}` | 200 |
-| POST | `/api/auth/refresh` | `{refresh_token}` | `{access_token, refresh_token}` | 200 |
+| POST | `/api/auth/refresh` | `{refresh_token}` | `{access_token, refresh_token: 原值}` | 200 |
 | POST | `/api/auth/logout` | (无) | `{ok: true}` | 200 |
 | GET | `/api/auth/me` | (无, 需鉴权) | `{user}` | 200 |
 
@@ -229,12 +229,6 @@ class RefreshRequest(BaseModel):
 1. SELECT user by email → 不存在返 401 `{detail: "邮箱或密码错误"}`（不区分）
 2. `verify_password` → 失败返同上 401
 3. 签发 access + refresh → 返回
-
-#### 刷新流程
-
-1. `decode_token(refresh_token, "refresh")` → 失败 401
-2. 签发新 access + 新 refresh（**轮换**——refresh token 一次性，旧 refresh 不能再用）
-3. 返回
 
 #### 登出流程
 
@@ -522,10 +516,10 @@ authedFetch 收到 401
   - 邮箱不存在 → 401（消息同密码错）
   - 密码错 → 401
 - `test_refresh.py`：
-  - 有效 refresh → 200，新 access + 新 refresh
-  - 旧 refresh 不能再用（轮换）→ 401
+  - 有效 refresh → 200，新 access + 原 refresh
   - 过期 refresh → 401
   - access token 当 refresh 用 → 401
+  - refresh 签发的新 access 能通过 `get_current_user` 验证 → 200
 - `test_auth_required.py`：
   - 无 token 访问 `/api/projects` → 401
   - 过期 access → 401
