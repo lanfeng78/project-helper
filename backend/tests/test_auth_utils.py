@@ -75,3 +75,39 @@ def test_invalid_signature_rejected():
     except Exception as e:
         assert e.status_code == 401
         assert "invalid" in e.detail
+
+
+def test_token_with_missing_sub_returns_401():
+    """token 缺少 sub 字段应被拒绝（不抛 500）。"""
+    import datetime as _dt
+    payload = {
+        "type": "access",
+        "exp": _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(minutes=5),
+        "iat": _dt.datetime.now(_dt.timezone.utc),
+        # no "sub" field
+    }
+    token = jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    try:
+        decode_token(token, expected_type="access")
+        assert False, "expected HTTPException"
+    except Exception as e:
+        assert e.status_code == 401
+        assert "invalid" in e.detail
+
+
+def test_token_with_non_numeric_sub_returns_401():
+    """sub 不是数字应被拒绝。"""
+    import datetime as _dt
+    payload = {
+        "sub": "not-a-number",
+        "type": "access",
+        "exp": _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(minutes=5),
+        "iat": _dt.datetime.now(_dt.timezone.utc),
+    }
+    token = jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    try:
+        decode_token(token, expected_type="access")
+        assert False, "expected HTTPException"
+    except Exception as e:
+        assert e.status_code == 401
+        assert "invalid" in e.detail

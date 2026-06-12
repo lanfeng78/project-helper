@@ -38,6 +38,7 @@ def create_refresh_token(user_id: int) -> str:
 
 
 def decode_token(token: str, expected_type: str) -> int:
+    """解码+验签+类型校验+过期校验+sub 校验。失败统一抛 401。返回 user_id。"""
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
     except jwt.ExpiredSignatureError:
@@ -46,4 +47,10 @@ def decode_token(token: str, expected_type: str) -> int:
         raise HTTPException(401, "invalid token")
     if payload.get("type") != expected_type:
         raise HTTPException(401, "invalid token type")
-    return int(payload["sub"])
+    sub = payload.get("sub")
+    if sub is None:
+        raise HTTPException(401, "invalid token")
+    try:
+        return int(sub)
+    except (TypeError, ValueError):
+        raise HTTPException(401, "invalid token")
