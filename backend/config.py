@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings
 from pathlib import Path
 
 class Settings(BaseSettings):
-    deepseek_api_key: str = "sk-3e7ab7379d5443dfb4f374d0fbc7b114"
+    deepseek_api_key: str = ""  # 通过 .env 注入，源码中不保留任何密钥
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-flash"
     db_path: str = str(Path(__file__).parent / "projects.db")
