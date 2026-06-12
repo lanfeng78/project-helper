@@ -82,3 +82,61 @@ def test_own_user_can_access_their_project(client, db_session):
 def test_analyze_requires_auth(client):
     res = client.post("/api/analyze", json={"repo_url": "https://github.com/x/y"})
     assert res.status_code == 401
+
+
+def test_analyze_cache_hit_does_not_leak_other_users_report(client, db_session, monkeypatch):
+    """User A's cached report must not be returned to user B."""
+    a = _create_user(db_session, "a@x.com", "userA")
+    b = _create_user(db_session, "b@x.com", "userB")
+
+    # User A has a finished project for some repo
+    repo_url = "https://github.com/facebook/react"
+    repo_hash = "fakehash_react"
+    db_session.add(Project(
+        id=f"u{a.id}_{repo_hash}",
+        repo_url=repo_url,
+        repo_name="react",
+        repo_hash=repo_hash,
+        status="done",
+        report_json='{"a_secret": "for A only"}',
+        user_id=a.id,
+    ))
+    db_session.commit()
+
+    # Stub repo_id so we get the predictable hash
+    import main as main_mod
+    monkeypatch.setattr(main_mod, "repo_id", lambda url: repo_hash)
+
+    # User B calls /api/analyze on the same URL
+    b_token = _login(client, "b@x.com")
+    res = client.post("/api/analyze", json={"repo_url": repo_url}, headers=_auth(b_token))
+
+    # Must NOT return user A's report. Either creates B's own project (200/202 with status pending)
+    # or returns 200 with cached=False, and CRUCIALLY: project_id should be u{B.id}_{hash}, not u{A.id}_{hash}.
+    assert res.status_code == 200
+    body = res.json()
+    assert body["project_id"] == f"u{b.id}_{repo_hash}"
+    # User B should not see user A's report content
+    if "report_json" in body:
+        assert body["report_json"] != {"a_secret": "for A only"}
+
+
+def test_qa_other_users_project_returns_403(client, db_session):
+    a = _create_user(db_session, "a@x.com", "userA")
+    b = _create_user(db_session, "b@x.com", "userB")
+    db_session.add(Project(
+        id=f"u{a.id}_xyz",
+        repo_url="https://github.com/x/y",
+        repo_name="y",
+        repo_hash="xyz",
+        status="done",
+        user_id=a.id,
+    ))
+    db_session.commit()
+
+    b_token = _login(client, "b@x.com")
+    res = client.post("/api/qa",
+        json={"project_id": f"u{a.id}_xyz", "question": "hi", "conversation": []},
+        headers=_auth(b_token),
+    )
+    assert res.status_code == 403

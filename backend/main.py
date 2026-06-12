@@ -66,8 +66,13 @@ async def analyze(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Start analysis of a GitHub repo. Returns immediately with project_id."""
-    pid = repo_id(req.repo_url)
+    """Start analysis of a GitHub repo. Returns immediately with project_id.
+
+    Each user has their own Project row (id is user-scoped). The repo source
+    cache on disk (`repos/{repo_hash}/`) is shared across users.
+    """
+    repo_hash = repo_id(req.repo_url)
+    pid = f"u{current_user.id}_{repo_hash}"
 
     existing = db.query(Project).filter(Project.id == pid).first()
     if existing and existing.status == "done":
@@ -84,12 +89,12 @@ async def analyze(
         existing.progress = 0.0
         existing.progress_msg = "准备分析..."
         existing.error_msg = ""
-        existing.user_id = current_user.id
     else:
         existing = Project(
             id=pid,
             repo_url=req.repo_url,
             repo_name=req.repo_url.rstrip("/").split("/")[-1],
+            repo_hash=repo_hash,
             status="pending",
             user_id=current_user.id,
         )
@@ -100,7 +105,7 @@ async def analyze(
 
     thread = threading.Thread(
         target=_run_analysis,
-        args=(pid, req.repo_url, current_user.id),
+        args=(pid, req.repo_url, repo_hash),
         daemon=True,
     )
     thread.start()
@@ -202,8 +207,7 @@ def delete_project(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Delete a cached project and its repo files."""
-    import shutil
+    """Delete a cached project. Repo source cache on disk is shared and not deleted here."""
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj:
         raise HTTPException(404, "项目不存在")
@@ -211,9 +215,8 @@ def delete_project(
         raise HTTPException(403, "无权访问此项目")
     db.delete(proj)
     db.commit()
-    repo_path = Path(settings.repos_dir) / project_id
-    if repo_path.exists():
-        shutil.rmtree(repo_path, ignore_errors=True)
+    # 注意: repo source 缓存 (repos/{repo_hash}/) 是跨用户共享的，
+    # 删除单个项目时不删除磁盘缓存——避免影响其他用户。
     return {"deleted": project_id}
 
 
@@ -255,9 +258,9 @@ async def qa(
     if proj.user_id != current_user.id:
         raise HTTPException(403, "无权访问此项目")
     if proj.status != "done":
-        raise HTTPException(400, "Project not analyzed yet")
+        raise HTTPException(400, "项目尚未分析完成")
 
-    repo_path = Path(settings.repos_dir) / req.project_id
+    repo_path = Path(settings.repos_dir) / proj.repo_hash
     if not repo_path.exists():
         raise HTTPException(404, "Repository files not found. Please re-analyze.")
 
@@ -279,8 +282,12 @@ async def qa(
     )
 
 
-def _run_analysis(pid: str, repo_url: str, user_id: int):
-    """Run the full analysis pipeline in a background thread."""
+def _run_analysis(pid: str, repo_url: str, repo_hash: str):
+    """Run the full analysis pipeline in a background thread.
+
+    pid: user-scoped Project.id
+    repo_hash: shared cache key for repos/{repo_hash}/
+    """
     from models import SessionLocal
     db = SessionLocal()
     try:

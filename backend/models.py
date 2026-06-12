@@ -26,6 +26,7 @@ class Project(Base):
     id = Column(String(64), primary_key=True)
     repo_url = Column(String(512), nullable=False)
     repo_name = Column(String(256), nullable=False)
+    repo_hash = Column(String(64), nullable=False, index=True, default="")
     status = Column(String(20), default="pending")
     progress = Column(Float, default=0.0)
     progress_msg = Column(String(512), default="")
