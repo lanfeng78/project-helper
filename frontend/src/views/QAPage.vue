@@ -4,7 +4,7 @@
       <!-- Chat Area -->
       <div class="qa-chat glass-card">
         <div class="qa-header">
-          <button class="btn btn-ghost" @click="$router.back()">← 返回</button>
+          <BackButton />
           <h2>💬 源码问答</h2>
           <span class="qa-project-name"># {{ projectId.slice(0, 8) }}</span>
         </div>
@@ -80,6 +80,7 @@ import { ref, onMounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { marked } from 'marked'
 import { streamQA, getReport } from '@/api'
+import BackButton from '@/components/BackButton.vue'
 
 const route = useRoute()
 const projectId = route.params.id

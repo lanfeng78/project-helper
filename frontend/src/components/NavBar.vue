@@ -11,8 +11,8 @@
           </svg>
         </div>
         <div class="logo-text">
-          <span class="logo-name">Project Helper</span>
-          <span class="logo-sub">AI-Powered Code Analyzer</span>
+          <span class="logo-name">[ project_helper ]</span>
+          <span class="logo-sub">AI · code · cartographer</span>
         </div>
       </router-link>
       <div class="nav-links">
@@ -59,10 +59,11 @@ async function handleLogout() {
   position: sticky;
   top: 0;
   z-index: 100;
-  background: rgba(6, 11, 26, 0.8);
+  background: rgba(10, 8, 34, 0.72);
   backdrop-filter: blur(24px) saturate(180%);
   -webkit-backdrop-filter: blur(24px) saturate(180%);
   border-bottom: 1px solid var(--border-subtle);
+  box-shadow: 0 1px 0 0 rgba(0, 229, 255, 0.06);
 }
 
 .nav-inner {
@@ -78,8 +79,21 @@ async function handleLogout() {
 .logo { display: flex; align-items: center; gap: 12px; text-decoration: none; }
 .logo-mark { color: var(--neon-cyan); }
 .logo-text { display: flex; flex-direction: column; }
-.logo-name { font-size: 1rem; font-weight: 700; color: var(--text-primary); letter-spacing: -0.01em; }
-.logo-sub { font-size: 0.65rem; color: var(--text-muted); font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; }
+.logo-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  letter-spacing: 0.02em;
+}
+.logo-sub {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-family: var(--font-mono);
+}
 
 .nav-links { display: flex; align-items: center; gap: var(--space-2); }
 

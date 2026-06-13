@@ -1,5 +1,8 @@
 ﻿<template>
   <div class="analyze-page">
+    <div class="page-toolbar">
+      <BackButton />
+    </div>
     <div class="analyze-card glass-card">
       <div class="analyze-header">
         <div class="status-icon" :class="{ done: isDone, error: isError }">
@@ -58,6 +61,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { subscribeProgress, analyzeRepo } from '@/api'
+import BackButton from '@/components/BackButton.vue'
 import ProgressBar from '@/components/ProgressBar.vue'
 
 const route = useRoute()
@@ -125,6 +129,12 @@ async function retry() {
 .analyze-page {
   max-width: 640px;
   margin: 60px auto;
+}
+
+.page-toolbar {
+  display: flex;
+  align-items: center;
+  margin-bottom: var(--space-3);
 }
 
 .analyze-card {

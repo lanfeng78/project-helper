@@ -20,6 +20,7 @@
     </Transition>
     <!-- Hero Section -->
     <section class="hero">
+      <div class="section-tag">▸ Project Helper <span class="num">/ 01</span></div>
       <div class="hero-badges">
         <span class="badge badge-cyan">DeepSeek V4</span>
         <span class="badge badge-magenta">LangChain</span>
@@ -72,7 +73,9 @@
     </section>
 
     <!-- Bento Grid Features -->
-    <section class="bento-grid">
+    <section class="bento-grid-wrap">
+      <div class="section-tag">▸ Capabilities <span class="num">/ 02</span></div>
+      <div class="bento-grid">
       <div class="bento-card bento-report glass-card">
         <div class="bento-icon" style="background: var(--neon-cyan-10)">
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--neon-cyan)" stroke-width="1.8">
@@ -133,10 +136,12 @@
           </div>
         </div>
       </div>
+      </div>
     </section>
 
     <!-- Recent Projects -->
     <section v-if="projects.length" class="recent-section">
+      <div class="section-tag">▸ Recent <span class="num">/ 03</span></div>
       <div class="section-header">
         <h2>最近分析</h2>
         <span class="section-count">{{ projects.length }} 个项目</span>
@@ -146,14 +151,18 @@
           v-for="p in projects"
           :key="p.id"
           class="project-card glass-card"
-          
+          role="button"
+          tabindex="0"
+          @click="$router.push(`/report/${p.id}`)"
+          @keydown.enter.prevent="$router.push(`/report/${p.id}`)"
+          @keydown.space.prevent="$router.push(`/report/${p.id}`)"
         >
-          <div class="project-icon" @click.stop="$router.push(`/report/${p.id}`)">
+          <div class="project-icon">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/>
             </svg>
           </div>
-          <div style="flex:1;cursor:pointer;min-width:0" >
+          <div class="project-meta">
             <div class="project-name">{{ p.repo_name }}</div>
             <div class="project-url">{{ p.repo_url }}</div>
           </div>
@@ -472,6 +481,15 @@ async function startAnalysis() {
   gap: var(--space-4);
   padding: var(--space-4) var(--space-5);
   cursor: pointer;
+}
+.project-card:focus-visible {
+  outline: 2px solid var(--neon-cyan);
+  outline-offset: 2px;
+}
+
+.project-meta {
+  flex: 1;
+  min-width: 0;
 }
 
 .project-icon {

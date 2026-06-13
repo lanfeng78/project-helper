@@ -261,10 +261,12 @@ async def qa(
         raise HTTPException(400, "项目尚未分析完成")
 
     repo_path = Path(settings.repos_dir) / proj.repo_hash
-    if not repo_path.exists():
-        raise HTTPException(404, "Repository files not found. Please re-analyze.")
-
-    files = scan_codebase(repo_path)
+    files = scan_codebase(repo_path) if repo_path.exists() else []
+    if not files:
+        raise HTTPException(
+            409,
+            "源码缓存已失效或为空，请回到首页删除该项目后重新分析。"
+        )
     context = build_context_summary(files)
 
     async def stream_qa():

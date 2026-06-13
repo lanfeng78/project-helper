@@ -75,25 +75,25 @@ const renderedHtml = computed(() => {
 .markdown-body .hljs-literal { color: #f78c6c; }
 .markdown-body .hljs-property { color: #80cbc4; }
 
-.markdown-body h1 { font-size: 2rem; margin: 32px 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border-color); }
+.markdown-body h1 { font-size: 2rem; margin: 32px 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border-medium); }
 .markdown-body h2 { font-size: 1.5rem; margin: 28px 0 12px; }
-.markdown-body h3 { font-size: 1.2rem; margin: 20px 0 10px; color: var(--accent-cyan); }
+.markdown-body h3 { font-size: 1.2rem; margin: 20px 0 10px; color: var(--neon-cyan); }
 .markdown-body p { margin: 8px 0; line-height: 1.7; }
 .markdown-body ul, .markdown-body ol { padding-left: 24px; margin: 8px 0; }
 .markdown-body li { margin: 4px 0; }
 .markdown-body blockquote {
-  border-left: 3px solid var(--accent-cyan);
+  border-left: 3px solid var(--neon-cyan);
   padding: 8px 16px;
   margin: 12px 0;
-  background: var(--accent-cyan-dim);
+  background: var(--neon-cyan-10);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   color: var(--text-secondary);
 }
-.markdown-body hr { border: none; border-top: 1px solid var(--border-color); margin: 24px 0; }
-.markdown-body strong { color: var(--accent-green); font-weight: 600; }
-.markdown-body a { color: var(--accent-cyan); }
+.markdown-body hr { border: none; border-top: 1px solid var(--border-medium); margin: 24px 0; }
+.markdown-body strong { color: var(--neon-lime); font-weight: 600; }
+.markdown-body a { color: var(--neon-cyan); }
 .markdown-body table { width: 100%; border-collapse: collapse; margin: 12px 0; }
-.markdown-body th, .markdown-body td { padding: 8px 12px; border: 1px solid var(--border-color); text-align: left; }
-.markdown-body th { background: var(--bg-card); font-weight: 600; }
+.markdown-body th, .markdown-body td { padding: 8px 12px; border: 1px solid var(--border-medium); text-align: left; }
+.markdown-body th { background: var(--bg-elevated); font-weight: 600; }
 .markdown-body img { max-width: 100%; border-radius: var(--radius-sm); }
 </style>

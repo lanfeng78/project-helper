@@ -11,6 +11,9 @@
     </div>
 
     <template v-else-if="report">
+      <div class="page-toolbar">
+        <BackButton />
+      </div>
       <div class="report-header glass-card">
         <div class="report-title-row">
           <div>
@@ -38,6 +41,7 @@ import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { getReport } from '@/api'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
+import BackButton from '@/components/BackButton.vue'
 
 const route = useRoute()
 const projectId = route.params.id
@@ -54,6 +58,12 @@ onMounted(async () => {
 
 <style scoped>
 .report-page { max-width: 960px; margin: 0 auto; padding-top: var(--space-4); }
+
+.page-toolbar {
+  display: flex;
+  align-items: center;
+  margin-bottom: var(--space-3);
+}
 
 .loading-state, .error-state {
   text-align: center;

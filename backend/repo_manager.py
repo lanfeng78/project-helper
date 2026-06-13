@@ -34,6 +34,10 @@ def fetch_via_api(url: str, progress_cb=None) -> tuple:
     """
     Fetch repository contents via GitHub REST API (sync).
     Returns (files, context_text). No git required.
+
+    Side effect: persists fetched files to ``<repos_dir>/<repo_hash>/`` so the
+    QA endpoint (which re-scans that directory) can find real content. Without
+    this, the API path leaves the directory empty and QA reports "files are empty".
     """
     owner, repo = parse_github_url(url)
 
@@ -54,10 +58,42 @@ def fetch_via_api(url: str, progress_cb=None) -> tuple:
 
     context = build_context_from_api(files, repo_info)
 
+    # Persist to disk so QA (which scan_codebase's the dir) sees real content.
+    _persist_files_to_disk(url, files)
+
     if progress_cb:
         progress_cb(0.70, f"API 读取完成，共 {len(files)} 个文件")
 
     return files, context
+
+
+def _persist_files_to_disk(url: str, files: list[dict]) -> None:
+    """Write each fetched file under ``<repos_dir>/<repo_hash>/<rel_path>``.
+
+    Skips placeholder content (e.g. "[文件过大: ...]") and any path that would
+    escape the repo root. Idempotent: clears the destination first so re-analysis
+    doesn't leak files from a prior run.
+    """
+    pid = repo_id(url)
+    dest = Path(settings.repos_dir) / pid
+    if dest.exists():
+        shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True, exist_ok=True)
+
+    for f in files:
+        rel = (f.get("path") or "").lstrip("/").replace("\\", "/")
+        if not rel or ".." in rel.split("/"):
+            continue
+        content = f.get("content", "")
+        if not isinstance(content, str) or content.startswith("[文件过大:"):
+            continue
+        target = dest / rel
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8", errors="replace")
+        except OSError:
+            # Best-effort: skip individual files that fail (long path, illegal chars).
+            continue
 
 # ============================================================
 #  FALLBACK: git clone (when API fails or user prefers)
