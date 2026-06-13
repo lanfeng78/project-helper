@@ -1,4 +1,1 @@
-INFO:     Started server process [3956]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+WARNING:  You must pass the application as an import string to enable 'reload' or 'workers'.

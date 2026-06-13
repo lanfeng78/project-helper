@@ -42,6 +42,62 @@ class Project(Base):
     owner = relationship("User", backref="projects")
 
 
+class QASession(Base):
+    """一次 QA 对话(豆包侧边栏的"一条对话")。
+
+    每个 session 隶属一个 user + 一个 project;同一项目下用户可以开多条独立对话。
+    title 默认占位"新对话",首条用户消息发出后用其前 40 个字符回填。
+    """
+    __tablename__ = "qa_sessions"
+
+    id = Column(String(36), primary_key=True)  # uuid4 hex
+    project_id = Column(
+        String(64),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    title = Column(String(120), default="新对话")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    messages = relationship(
+        "QAMessage",
+        backref="session",
+        cascade="all, delete-orphan",
+        order_by="QAMessage.id",
+    )
+
+
+class QAMessage(Base):
+    """会话内的单条消息(role + content)。
+
+    顺序由自增 id 决定;同一 session 内 id 递增即为发送顺序。
+    """
+    __tablename__ = "qa_messages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(
+        String(36),
+        ForeignKey("qa_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    role = Column(String(16), nullable=False)  # "user" | "assistant"
+    content = Column(Text, nullable=False, default="")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 engine = create_engine(
     f"sqlite:///{settings.db_path}",
     connect_args={"check_same_thread": False, "timeout": 30}

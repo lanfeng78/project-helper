@@ -1,0 +1,10 @@
+
+  [32m[1mVITE[22m v8.0.14[39m  [2mready in [0m[1m539[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m3000[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://192.168.83.1:[1m3000[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://192.168.80.1:[1m3000[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://10.161.145.90:[1m3000[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://172.30.80.1:[1m3000[22m/[39m
+[2m17:45:06[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/HomePage.vue, /src/views/ReportPage.vue, /src/views/QAPage.vue[22m
+[2m17:47:09[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/QAPage.vue, /src/views/QAPage.vue?vue&type=style&index=0&scoped=2d569673&lang.css[22m

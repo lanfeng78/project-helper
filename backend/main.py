@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 import json
+import uuid
 import asyncio
 import threading
 from pathlib import Path
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,7 +16,7 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from config import settings
-from models import init_db, get_db, Project, User
+from models import init_db, get_db, Project, User, QASession, QAMessage
 from repo_manager import repo_id, clone_repo, scan_codebase, build_context_summary, fetch_via_api
 from analyzer import analyze_codebase, build_markdown_report
 from qa_engine import answer_question
@@ -52,6 +53,16 @@ class QARequest(BaseModel):
     project_id: str
     question: str
     conversation: list[dict] = []
+    session_id: Optional[str] = None  # 若空则后端为本次提问新建一条会话
+
+
+class QASessionCreateRequest(BaseModel):
+    project_id: str
+    title: Optional[str] = None
+
+
+class QASessionRenameRequest(BaseModel):
+    title: str
 
 
 progress_store: dict[str, dict] = {}
@@ -263,7 +274,13 @@ async def qa(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Streaming Q&A about a project's source code."""
+    """Streaming Q&A about a project's source code.
+
+    若提供 session_id 则把 user/assistant 两端消息持久化到 qa_messages,
+    否则后端会为本次提问新建一条 QASession(豆包"自动开新对话"行为)。
+    流前先入库 user 消息;流式过程中累计 assistant 内容,流结束后入库 +
+    bump session.updated_at;首条用户消息时用其前 40 字符回填 title。
+    """
     proj = db.query(Project).filter(Project.id == req.project_id).first()
     if not proj:
         raise HTTPException(404, "项目不存在")
@@ -281,9 +298,83 @@ async def qa(
         )
     context = build_context_summary(files)
 
+    # ── 解析或新建会话 ──
+    session: Optional[QASession] = None
+    if req.session_id:
+        session = (
+            db.query(QASession)
+            .filter(QASession.id == req.session_id)
+            .first()
+        )
+        if not session:
+            raise HTTPException(404, "会话不存在")
+        if session.user_id != current_user.id or session.project_id != req.project_id:
+            raise HTTPException(403, "无权访问此会话")
+    else:
+        session = QASession(
+            id=uuid.uuid4().hex,
+            project_id=req.project_id,
+            user_id=current_user.id,
+            title=_make_session_title(req.question),
+        )
+        db.add(session)
+        db.flush()  # 取 id 给前端
+
+    # 若是首条消息(无任何 message),用本次提问回填 title
+    has_msg = (
+        db.query(QAMessage.id)
+        .filter(QAMessage.session_id == session.id)
+        .first()
+        is not None
+    )
+    if not has_msg:
+        session.title = _make_session_title(req.question)
+
+    # 入库 user 消息
+    db.add(QAMessage(session_id=session.id, role="user", content=req.question))
+    session.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    session_id = session.id
+
+    # ── 优先使用数据库里的历史(防止前端发来的 conversation 不全)──
+    history = (
+        db.query(QAMessage)
+        .filter(QAMessage.session_id == session_id)
+        .order_by(QAMessage.id.asc())
+        .all()
+    )
+    # 最后一条就是刚刚入库的 user 提问;answer_question 单独接 question 参数,
+    # 所以 conversation 只取除最后一条之外的历史即可。
+    conversation = [
+        {"role": m.role, "content": m.content} for m in history[:-1]
+    ]
+
     async def stream_qa():
-        async for token in answer_question(context, req.conversation, req.question):
-            yield token
+        buf: list[str] = []
+        try:
+            async for token in answer_question(context, conversation, req.question):
+                buf.append(token)
+                yield token
+        finally:
+            # 不论正常/异常结束都把已生成内容存下来;异常情况下用户也能看到截断回复。
+            content = "".join(buf).strip()
+            if content:
+                from models import SessionLocal
+                _db = SessionLocal()
+                try:
+                    _db.add(QAMessage(
+                        session_id=session_id,
+                        role="assistant",
+                        content=content,
+                    ))
+                    _sess = _db.query(QASession).filter(QASession.id == session_id).first()
+                    if _sess:
+                        _sess.updated_at = datetime.now(timezone.utc)
+                    _db.commit()
+                except Exception:
+                    _db.rollback()
+                finally:
+                    _db.close()
 
     return StreamingResponse(
         stream_qa(),
@@ -292,8 +383,149 @@ async def qa(
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
+            # 把 session_id 透回给前端,前端拿到后写进 router query
+            "X-Session-Id": session_id,
+            "Access-Control-Expose-Headers": "X-Session-Id",
         }
     )
+
+
+def _make_session_title(text: str, limit: int = 40) -> str:
+    """把用户首句话压成一行短标题,超长截断 + 省略号。"""
+    s = (text or "").strip().replace("\n", " ").replace("\r", " ")
+    if not s:
+        return "新对话"
+    return s if len(s) <= limit else s[:limit] + "…"
+
+
+# ─────────────────────────── QA 会话管理 ───────────────────────────
+
+@app.get("/api/qa/sessions")
+def list_qa_sessions(
+    project_id: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """列出当前用户在指定项目下的全部会话(按 updated_at 倒序)。"""
+    proj = db.query(Project).filter(Project.id == project_id).first()
+    if not proj:
+        raise HTTPException(404, "项目不存在")
+    if proj.user_id != current_user.id:
+        raise HTTPException(403, "无权访问此项目")
+
+    sessions = (
+        db.query(QASession)
+        .filter(
+            QASession.project_id == project_id,
+            QASession.user_id == current_user.id,
+        )
+        .order_by(QASession.updated_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": s.id,
+            "title": s.title or "新对话",
+            "created_at": s.created_at.isoformat() if s.created_at else "",
+            "updated_at": s.updated_at.isoformat() if s.updated_at else "",
+        }
+        for s in sessions
+    ]
+
+
+@app.post("/api/qa/sessions")
+def create_qa_session(
+    req: QASessionCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """显式新建一条空会话(前端"+ 新对话"按钮)。"""
+    proj = db.query(Project).filter(Project.id == req.project_id).first()
+    if not proj:
+        raise HTTPException(404, "项目不存在")
+    if proj.user_id != current_user.id:
+        raise HTTPException(403, "无权访问此项目")
+
+    sess = QASession(
+        id=uuid.uuid4().hex,
+        project_id=req.project_id,
+        user_id=current_user.id,
+        title=req.title or "新对话",
+    )
+    db.add(sess)
+    db.commit()
+    return {
+        "id": sess.id,
+        "title": sess.title,
+        "created_at": sess.created_at.isoformat() if sess.created_at else "",
+        "updated_at": sess.updated_at.isoformat() if sess.updated_at else "",
+    }
+
+
+@app.get("/api/qa/sessions/{session_id}/messages")
+def get_qa_messages(
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """拿一条会话的全部消息(按发送顺序)。"""
+    sess = db.query(QASession).filter(QASession.id == session_id).first()
+    if not sess:
+        raise HTTPException(404, "会话不存在")
+    if sess.user_id != current_user.id:
+        raise HTTPException(403, "无权访问此会话")
+
+    msgs = (
+        db.query(QAMessage)
+        .filter(QAMessage.session_id == session_id)
+        .order_by(QAMessage.id.asc())
+        .all()
+    )
+    return {
+        "session": {
+            "id": sess.id,
+            "title": sess.title or "新对话",
+            "project_id": sess.project_id,
+            "updated_at": sess.updated_at.isoformat() if sess.updated_at else "",
+        },
+        "messages": [
+            {"role": m.role, "content": m.content}
+            for m in msgs
+        ],
+    }
+
+
+@app.patch("/api/qa/sessions/{session_id}")
+def rename_qa_session(
+    session_id: str,
+    req: QASessionRenameRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    sess = db.query(QASession).filter(QASession.id == session_id).first()
+    if not sess:
+        raise HTTPException(404, "会话不存在")
+    if sess.user_id != current_user.id:
+        raise HTTPException(403, "无权访问此会话")
+    sess.title = (req.title or "").strip()[:120] or "新对话"
+    db.commit()
+    return {"id": sess.id, "title": sess.title}
+
+
+@app.delete("/api/qa/sessions/{session_id}")
+def delete_qa_session(
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    sess = db.query(QASession).filter(QASession.id == session_id).first()
+    if not sess:
+        raise HTTPException(404, "会话不存在")
+    if sess.user_id != current_user.id:
+        raise HTTPException(403, "无权访问此会话")
+    db.delete(sess)
+    db.commit()
+    return {"deleted": session_id}
 
 
 def _run_analysis(pid: str, repo_url: str, repo_hash: str, mode: str = "detail"):
