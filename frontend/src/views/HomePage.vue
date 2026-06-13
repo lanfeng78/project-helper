@@ -1,23 +1,5 @@
 ﻿<template>
   <div class="home-page">
-    <Transition name="fade">
-      <div v-if="!auth.user" class="login-banner glass-card">
-        <div class="login-banner-icon">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--neon-cyan)" stroke-width="2">
-            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-            <circle cx="12" cy="7" r="4"/>
-          </svg>
-        </div>
-        <div class="login-banner-text">
-          <h3>登录以保存你的项目</h3>
-          <p>每个分析的项目都会归你所有，随时回看</p>
-        </div>
-        <div class="login-banner-actions">
-          <router-link :to="{ name: 'Login' }" class="btn btn-secondary">登录</router-link>
-          <router-link :to="{ name: 'Register' }" class="btn btn-primary">注册</router-link>
-        </div>
-      </div>
-    </Transition>
     <!-- Hero Section -->
     <section class="hero">
       <div class="section-tag">▸ Project Helper <span class="num">/ 01</span></div>
@@ -238,11 +220,9 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { useAuthStore } from '@/stores/auth'
 import { analyzeRepo, listProjects, deleteProject } from '@/api'
 
 const router = useRouter()
-const auth = useAuthStore()
 const repoUrl = ref('')
 const loading = ref(false)
 const error = ref('')
@@ -255,7 +235,6 @@ const confirmingId = ref(null)
 let confirmTimer = null
 
 onMounted(async () => {
-  if (!auth.user) return
   try { projects.value = await listProjects() } catch {}
 })
 
@@ -292,10 +271,6 @@ async function reallyRemove(id) {
 }
 
 async function startAnalysis() {
-  if (!auth.user) {
-    router.push({ name: 'Login', query: { redirect: '/' } })
-    return
-  }
   error.value = ''
   const url = repoUrl.value.trim()
   if (!url) { error.value = '请输入 GitHub 仓库地址'; return }
@@ -777,24 +752,4 @@ async function startAnalysis() {
   .bento-grid { grid-template-columns: 1fr; }
   .bento-report, .bento-qa, .bento-speed, .bento-stats { grid-column: 1; }
 }
-
-.login-banner {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-5) var(--space-6);
-  margin-bottom: var(--space-8);
-  border: 1px solid var(--neon-cyan-25);
-}
-.login-banner-icon {
-  width: 48px; height: 48px;
-  display: flex; align-items: center; justify-content: center;
-  background: var(--neon-cyan-10);
-  border-radius: var(--radius-md);
-  flex-shrink: 0;
-}
-.login-banner-text { flex: 1; }
-.login-banner-text h3 { font-size: 1rem; margin-bottom: 4px; }
-.login-banner-text p { color: var(--text-secondary); font-size: 0.85rem; }
-.login-banner-actions { display: flex; gap: var(--space-2); }
 </style>

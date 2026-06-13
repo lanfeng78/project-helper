@@ -13,12 +13,6 @@ class Settings(BaseSettings):
     max_file_size: int = 200 * 1024
     max_total_size: int = 5 * 1024 * 1024
 
-    # Auth
-    jwt_secret: str = "change-me-in-prod-please-use-32-chars-min"
-    jwt_algorithm: str = "HS256"
-    access_token_ttl_min: int = 15
-    refresh_token_ttl_days: int = 7
-
     class Config:
         env_file = ".env"
         extra = "ignore"

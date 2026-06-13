@@ -16,12 +16,10 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from config import settings
-from models import init_db, get_db, Project, User, QASession, QAMessage
+from models import init_db, get_db, Project, QASession, QAMessage
 from repo_manager import repo_id, clone_repo, scan_codebase, build_context_summary, fetch_via_api
 from analyzer import analyze_codebase, build_markdown_report
 from qa_engine import answer_question
-from auth import router as auth_router
-from dependencies import get_current_user, get_current_user_sse
 
 
 @asynccontextmanager
@@ -31,7 +29,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Project Helper", version="1.1.0", lifespan=lifespan)
+app = FastAPI(title="Project Helper", version="2.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,8 +38,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-app.include_router(auth_router)
 
 
 class AnalyzeRequest(BaseModel):
@@ -77,18 +73,14 @@ def health():
 async def analyze(
     req: AnalyzeRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     """Start analysis of a GitHub repo. Returns immediately with project_id.
-
-    Each user has their own Project row (id is user-scoped). The repo source
-    cache on disk (`repos/{repo_hash}/`) is shared across users.
 
     Mode (simple|detail) is part of the project key, so simple and detail
     reports for the same repo coexist as two independent rows.
     """
     repo_hash = repo_id(req.repo_url)
-    pid = f"u{current_user.id}_{repo_hash}_{req.mode}"
+    pid = f"{repo_hash}_{req.mode}"
 
     existing = db.query(Project).filter(Project.id == pid).first()
     if existing and existing.status == "done":
@@ -115,7 +107,6 @@ async def analyze(
             repo_hash=repo_hash,
             analysis_mode=req.mode,
             status="pending",
-            user_id=current_user.id,
         )
         db.add(existing)
     db.commit()
@@ -135,15 +126,12 @@ async def analyze(
 @app.get("/api/progress/{project_id}")
 async def progress(
     project_id: str,
-    current_user: User = Depends(get_current_user_sse),
     db: Session = Depends(get_db),
 ):
     """SSE endpoint for real-time progress with keepalive pings."""
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj:
         raise HTTPException(404, "项目不存在")
-    if proj.user_id != current_user.id:
-        raise HTTPException(403, "无权访问此项目")
 
     async def event_stream():
         last_progress = -1
@@ -197,14 +185,11 @@ async def progress(
 def get_report(
     project_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     """Get the analysis report for a project."""
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj:
         raise HTTPException(404, "项目不存在")
-    if proj.user_id != current_user.id:
-        raise HTTPException(403, "无权访问此项目")
     if proj.status == "error":
         raise HTTPException(400, proj.error_msg or "分析失败")
     if proj.status != "done":
@@ -226,30 +211,24 @@ def get_report(
 def delete_project(
     project_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
-    """Delete a cached project. Repo source cache on disk is shared and not deleted here."""
+    """Delete a cached project (DB row only). Repo source cache on disk is kept."""
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj:
         raise HTTPException(404, "项目不存在")
-    if proj.user_id != current_user.id:
-        raise HTTPException(403, "无权访问此项目")
     db.delete(proj)
     db.commit()
-    # 注意: repo source 缓存 (repos/{repo_hash}/) 是跨用户共享的，
-    # 删除单个项目时不删除磁盘缓存——避免影响其他用户。
     return {"deleted": project_id}
 
 
 @app.get("/api/projects")
 def list_projects(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
-    """List current user's cached/completed projects."""
+    """List all cached/completed projects."""
     projects = (
         db.query(Project)
-        .filter(Project.user_id == current_user.id, Project.status == "done")
+        .filter(Project.status == "done")
         .order_by(Project.updated_at.desc())
         .limit(20)
         .all()
@@ -272,20 +251,17 @@ def list_projects(
 async def qa(
     req: QARequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     """Streaming Q&A about a project's source code.
 
     若提供 session_id 则把 user/assistant 两端消息持久化到 qa_messages,
-    否则后端会为本次提问新建一条 QASession(豆包"自动开新对话"行为)。
-    流前先入库 user 消息;流式过程中累计 assistant 内容,流结束后入库 +
-    bump session.updated_at;首条用户消息时用其前 40 字符回填 title。
+    否则后端会为本次提问新建一条 QASession。流前先入库 user 消息;流式过
+    程中累计 assistant 内容,流结束后入库 + bump session.updated_at;首条
+    用户消息时用其前 40 字符回填 title。
     """
     proj = db.query(Project).filter(Project.id == req.project_id).first()
     if not proj:
         raise HTTPException(404, "项目不存在")
-    if proj.user_id != current_user.id:
-        raise HTTPException(403, "无权访问此项目")
     if proj.status != "done":
         raise HTTPException(400, "项目尚未分析完成")
 
@@ -308,17 +284,16 @@ async def qa(
         )
         if not session:
             raise HTTPException(404, "会话不存在")
-        if session.user_id != current_user.id or session.project_id != req.project_id:
-            raise HTTPException(403, "无权访问此会话")
+        if session.project_id != req.project_id:
+            raise HTTPException(400, "会话与项目不匹配")
     else:
         session = QASession(
             id=uuid.uuid4().hex,
             project_id=req.project_id,
-            user_id=current_user.id,
             title=_make_session_title(req.question),
         )
         db.add(session)
-        db.flush()  # 取 id 给前端
+        db.flush()
 
     # 若是首条消息(无任何 message),用本次提问回填 title
     has_msg = (
@@ -330,21 +305,17 @@ async def qa(
     if not has_msg:
         session.title = _make_session_title(req.question)
 
-    # 入库 user 消息
     db.add(QAMessage(session_id=session.id, role="user", content=req.question))
     session.updated_at = datetime.now(timezone.utc)
     db.commit()
     session_id = session.id
 
-    # ── 优先使用数据库里的历史(防止前端发来的 conversation 不全)──
     history = (
         db.query(QAMessage)
         .filter(QAMessage.session_id == session_id)
         .order_by(QAMessage.id.asc())
         .all()
     )
-    # 最后一条就是刚刚入库的 user 提问;answer_question 单独接 question 参数,
-    # 所以 conversation 只取除最后一条之外的历史即可。
     conversation = [
         {"role": m.role, "content": m.content} for m in history[:-1]
     ]
@@ -356,7 +327,6 @@ async def qa(
                 buf.append(token)
                 yield token
         finally:
-            # 不论正常/异常结束都把已生成内容存下来;异常情况下用户也能看到截断回复。
             content = "".join(buf).strip()
             if content:
                 from models import SessionLocal
@@ -383,7 +353,6 @@ async def qa(
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
-            # 把 session_id 透回给前端,前端拿到后写进 router query
             "X-Session-Id": session_id,
             "Access-Control-Expose-Headers": "X-Session-Id",
         }
@@ -404,21 +373,15 @@ def _make_session_title(text: str, limit: int = 40) -> str:
 def list_qa_sessions(
     project_id: str = Query(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
-    """列出当前用户在指定项目下的全部会话(按 updated_at 倒序)。"""
+    """列出指定项目下的全部会话(按 updated_at 倒序)。"""
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj:
         raise HTTPException(404, "项目不存在")
-    if proj.user_id != current_user.id:
-        raise HTTPException(403, "无权访问此项目")
 
     sessions = (
         db.query(QASession)
-        .filter(
-            QASession.project_id == project_id,
-            QASession.user_id == current_user.id,
-        )
+        .filter(QASession.project_id == project_id)
         .order_by(QASession.updated_at.desc())
         .all()
     )
@@ -437,19 +400,15 @@ def list_qa_sessions(
 def create_qa_session(
     req: QASessionCreateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     """显式新建一条空会话(前端"+ 新对话"按钮)。"""
     proj = db.query(Project).filter(Project.id == req.project_id).first()
     if not proj:
         raise HTTPException(404, "项目不存在")
-    if proj.user_id != current_user.id:
-        raise HTTPException(403, "无权访问此项目")
 
     sess = QASession(
         id=uuid.uuid4().hex,
         project_id=req.project_id,
-        user_id=current_user.id,
         title=req.title or "新对话",
     )
     db.add(sess)
@@ -466,14 +425,11 @@ def create_qa_session(
 def get_qa_messages(
     session_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     """拿一条会话的全部消息(按发送顺序)。"""
     sess = db.query(QASession).filter(QASession.id == session_id).first()
     if not sess:
         raise HTTPException(404, "会话不存在")
-    if sess.user_id != current_user.id:
-        raise HTTPException(403, "无权访问此会话")
 
     msgs = (
         db.query(QAMessage)
@@ -500,13 +456,10 @@ def rename_qa_session(
     session_id: str,
     req: QASessionRenameRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     sess = db.query(QASession).filter(QASession.id == session_id).first()
     if not sess:
         raise HTTPException(404, "会话不存在")
-    if sess.user_id != current_user.id:
-        raise HTTPException(403, "无权访问此会话")
     sess.title = (req.title or "").strip()[:120] or "新对话"
     db.commit()
     return {"id": sess.id, "title": sess.title}
@@ -516,25 +469,17 @@ def rename_qa_session(
 def delete_qa_session(
     session_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     sess = db.query(QASession).filter(QASession.id == session_id).first()
     if not sess:
         raise HTTPException(404, "会话不存在")
-    if sess.user_id != current_user.id:
-        raise HTTPException(403, "无权访问此会话")
     db.delete(sess)
     db.commit()
     return {"deleted": session_id}
 
 
 def _run_analysis(pid: str, repo_url: str, repo_hash: str, mode: str = "detail"):
-    """Run the full analysis pipeline in a background thread.
-
-    pid: user-scoped Project.id (already includes mode suffix)
-    repo_hash: shared cache key for repos/{repo_hash}/
-    mode: "simple" | "detail" — controls model + prompt + context size
-    """
+    """Run the full analysis pipeline in a background thread."""
     from models import SessionLocal
     db = SessionLocal()
     try:
@@ -569,7 +514,6 @@ def _run_analysis(pid: str, repo_url: str, repo_hash: str, mode: str = "detail")
 
         markdown = build_markdown_report(report)
 
-        # Resolve which actual model name was used (for the badge / debugging).
         if mode == "simple":
             model_name = settings.deepseek_model_simple or settings.deepseek_model
         else:
@@ -605,4 +549,4 @@ def _run_analysis(pid: str, repo_url: str, repo_hash: str, mode: str = "detail")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

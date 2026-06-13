@@ -1,48 +1,33 @@
-import { useAuthStore } from '@/stores/auth'
-import router from '@/router'
-
+// 用户系统已移除——所有请求都是无鉴权的直连。
+// 保留极小的 fetch 包装方便集中处理网络错误,主要是为了:
+//   - 给 SSE / 流式 fetch 留一处统一的 BASE 拼接;
+//   - 错误信息统一从 JSON 解析 detail,失败时退回 statusText。
 const BASE = '/api'
 
-export async function authedFetch(url, options = {}) {
-  const auth = useAuthStore()
-  const headers = { ...(options.headers || {}) }
-
-  if (auth.accessToken) {
-    headers['Authorization'] = `Bearer ${auth.accessToken}`
+async function jsonRequest(url, options = {}) {
+  const res = await fetch(url, options)
+  if (!res.ok) {
+    let msg = res.statusText || 'Request failed'
+    try {
+      const err = await res.json()
+      if (err && err.detail) msg = err.detail
+    } catch { /* response not JSON, keep statusText */ }
+    throw new Error(msg)
   }
-
-  let res = await fetch(url, { ...options, headers })
-
-  if (res.status === 401 && auth.refreshToken) {
-    const ok = await auth.tryRefresh()
-    if (ok) {
-      headers['Authorization'] = `Bearer ${auth.accessToken}`
-      res = await fetch(url, { ...options, headers })
-    } else {
-      router.push('/login')
-      throw new Error('会话已过期，请重新登录')
-    }
-  }
-
   return res
 }
 
 export async function analyzeRepo(repoUrl, mode = 'detail') {
-  const res = await authedFetch(`${BASE}/analyze`, {
+  const res = await jsonRequest(`${BASE}/analyze`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ repo_url: repoUrl, mode })
   })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Request failed' }))
-    throw new Error(err.detail || 'Request failed')
-  }
   return res.json()
 }
 
 export function subscribeProgress(projectId, onProgress, onDone, onError) {
-  const auth = useAuthStore()
-  const url = `${BASE}/progress/${projectId}?token=${encodeURIComponent(auth.accessToken)}`
+  const url = `${BASE}/progress/${projectId}`
   let reconnectAttempts = 0
   const MAX_RECONNECT = 3
   let es = null
@@ -100,28 +85,20 @@ export function subscribeProgress(projectId, onProgress, onDone, onError) {
 }
 
 export async function getReport(projectId) {
-  const res = await authedFetch(`${BASE}/report/${projectId}`)
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Report not found' }))
-    throw new Error(err.detail || 'Report not found')
-  }
+  const res = await jsonRequest(`${BASE}/report/${projectId}`)
   return res.json()
 }
 
 export async function listProjects() {
-  const res = await authedFetch(`${BASE}/projects`)
+  const res = await jsonRequest(`${BASE}/projects`)
   return res.json()
 }
 
 export async function streamQA(projectId, question, conversation, onToken, onDone, onError, sessionId = null) {
-  const auth = useAuthStore()
   try {
     const res = await fetch(`${BASE}/qa`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${auth.accessToken}`
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         project_id: projectId,
         question,
@@ -130,11 +107,9 @@ export async function streamQA(projectId, question, conversation, onToken, onDon
       })
     })
     if (!res.ok) {
-      if (res.status === 401) {
-        const ok = await auth.tryRefresh()
-        if (ok) return streamQA(projectId, question, conversation, onToken, onDone, onError, sessionId)
-      }
-      throw new Error('QA failed')
+      let msg = res.statusText || 'QA failed'
+      try { const err = await res.json(); if (err && err.detail) msg = err.detail } catch {}
+      throw new Error(msg)
     }
     // 后端通过 X-Session-Id 头把(可能新建的)会话 id 透回来
     const newSessionId = res.headers.get('X-Session-Id') || sessionId
@@ -151,48 +126,42 @@ export async function streamQA(projectId, question, conversation, onToken, onDon
   }
 }
 
+export async function deleteProject(projectId) {
+  const res = await jsonRequest(`${BASE}/projects/${projectId}`, { method: 'DELETE' })
+  return res.json()
+}
+
 // ────────────── QA 会话管理 ──────────────
 
 export async function listQASessions(projectId) {
-  const res = await authedFetch(`${BASE}/qa/sessions?project_id=${encodeURIComponent(projectId)}`)
-  if (!res.ok) throw new Error('加载会话列表失败')
+  const res = await jsonRequest(`${BASE}/qa/sessions?project_id=${encodeURIComponent(projectId)}`)
   return res.json()
 }
 
 export async function createQASession(projectId, title = null) {
-  const res = await authedFetch(`${BASE}/qa/sessions`, {
+  const res = await jsonRequest(`${BASE}/qa/sessions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ project_id: projectId, title })
   })
-  if (!res.ok) throw new Error('新建会话失败')
   return res.json()
 }
 
 export async function getQAMessages(sessionId) {
-  const res = await authedFetch(`${BASE}/qa/sessions/${sessionId}/messages`)
-  if (!res.ok) throw new Error('加载历史失败')
+  const res = await jsonRequest(`${BASE}/qa/sessions/${sessionId}/messages`)
   return res.json()
 }
 
 export async function renameQASession(sessionId, title) {
-  const res = await authedFetch(`${BASE}/qa/sessions/${sessionId}`, {
+  const res = await jsonRequest(`${BASE}/qa/sessions/${sessionId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title })
   })
-  if (!res.ok) throw new Error('重命名失败')
   return res.json()
 }
 
 export async function deleteQASession(sessionId) {
-  const res = await authedFetch(`${BASE}/qa/sessions/${sessionId}`, { method: 'DELETE' })
-  if (!res.ok) throw new Error('删除会话失败')
-  return res.json()
-}
-
-export async function deleteProject(projectId) {
-  const res = await authedFetch(`${BASE}/projects/${projectId}`, { method: 'DELETE' })
-  if (!res.ok) throw new Error('Delete failed')
+  const res = await jsonRequest(`${BASE}/qa/sessions/${sessionId}`, { method: 'DELETE' })
   return res.json()
 }
