@@ -5,6 +5,7 @@ import threading
 from pathlib import Path
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,6 +45,7 @@ app.include_router(auth_router)
 
 class AnalyzeRequest(BaseModel):
     repo_url: str
+    mode: Literal["simple", "detail"] = "detail"
 
 
 class QARequest(BaseModel):
@@ -70,9 +72,12 @@ async def analyze(
 
     Each user has their own Project row (id is user-scoped). The repo source
     cache on disk (`repos/{repo_hash}/`) is shared across users.
+
+    Mode (simple|detail) is part of the project key, so simple and detail
+    reports for the same repo coexist as two independent rows.
     """
     repo_hash = repo_id(req.repo_url)
-    pid = f"u{current_user.id}_{repo_hash}"
+    pid = f"u{current_user.id}_{repo_hash}_{req.mode}"
 
     existing = db.query(Project).filter(Project.id == pid).first()
     if existing and existing.status == "done":
@@ -82,6 +87,7 @@ async def analyze(
             "cached": True,
             "report_json": json.loads(existing.report_json) if existing.report_json else {},
             "report_markdown": existing.report_markdown,
+            "analysis_mode": existing.analysis_mode or req.mode,
         }
 
     if existing:
@@ -89,12 +95,14 @@ async def analyze(
         existing.progress = 0.0
         existing.progress_msg = "准备分析..."
         existing.error_msg = ""
+        existing.analysis_mode = req.mode
     else:
         existing = Project(
             id=pid,
             repo_url=req.repo_url,
             repo_name=req.repo_url.rstrip("/").split("/")[-1],
             repo_hash=repo_hash,
+            analysis_mode=req.mode,
             status="pending",
             user_id=current_user.id,
         )
@@ -105,12 +113,12 @@ async def analyze(
 
     thread = threading.Thread(
         target=_run_analysis,
-        args=(pid, req.repo_url, repo_hash),
+        args=(pid, req.repo_url, repo_hash, req.mode),
         daemon=True,
     )
     thread.start()
 
-    return {"project_id": pid, "status": "pending", "cached": False}
+    return {"project_id": pid, "status": "pending", "cached": False, "analysis_mode": req.mode}
 
 
 @app.get("/api/progress/{project_id}")
@@ -196,6 +204,8 @@ def get_report(
         "repo_url": proj.repo_url,
         "repo_name": proj.repo_name,
         "status": "done",
+        "analysis_mode": proj.analysis_mode or "detail",
+        "model_used": proj.model_used or "",
         "report_json": json.loads(proj.report_json) if proj.report_json else {},
         "report_markdown": proj.report_markdown,
     }
@@ -240,6 +250,8 @@ def list_projects(
             "repo_name": p.repo_name,
             "updated_at": p.updated_at.isoformat() if p.updated_at else "",
             "tech_stack": p.tech_stack[:200] if p.tech_stack else "",
+            "analysis_mode": p.analysis_mode or "detail",
+            "model_used": p.model_used or "",
         }
         for p in projects
     ]
@@ -284,11 +296,12 @@ async def qa(
     )
 
 
-def _run_analysis(pid: str, repo_url: str, repo_hash: str):
+def _run_analysis(pid: str, repo_url: str, repo_hash: str, mode: str = "detail"):
     """Run the full analysis pipeline in a background thread.
 
-    pid: user-scoped Project.id
+    pid: user-scoped Project.id (already includes mode suffix)
     repo_hash: shared cache key for repos/{repo_hash}/
+    mode: "simple" | "detail" — controls model + prompt + context size
     """
     from models import SessionLocal
     db = SessionLocal()
@@ -316,11 +329,19 @@ def _run_analysis(pid: str, repo_url: str, repo_hash: str):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            report = loop.run_until_complete(analyze_codebase(context, progress_cb=update))
+            report = loop.run_until_complete(
+                analyze_codebase(context, mode=mode, progress_cb=update)
+            )
         finally:
             loop.close()
 
         markdown = build_markdown_report(report)
+
+        # Resolve which actual model name was used (for the badge / debugging).
+        if mode == "simple":
+            model_name = settings.deepseek_model_simple or settings.deepseek_model
+        else:
+            model_name = settings.deepseek_model_detail or settings.deepseek_model
 
         proj = db.query(Project).filter(Project.id == pid).first()
         if proj:
@@ -330,6 +351,8 @@ def _run_analysis(pid: str, repo_url: str, repo_hash: str):
             proj.report_json = json.dumps(report, ensure_ascii=False)
             proj.report_markdown = markdown
             proj.tech_stack = str(report.get("tech_stack", ""))
+            proj.analysis_mode = mode
+            proj.model_used = model_name
             proj.updated_at = datetime.now(timezone.utc)
             db.commit()
 

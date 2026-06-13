@@ -67,6 +67,35 @@
         </button>
       </div>
 
+      <!-- Analysis Mode Toggle -->
+      <div class="mode-toggle" role="radiogroup" aria-label="分析模式">
+        <span class="mode-toggle-label">分析模式</span>
+        <div class="mode-toggle-group">
+          <button
+            type="button"
+            class="mode-pill"
+            :class="{ active: mode === 'simple' }"
+            :aria-checked="mode === 'simple'"
+            role="radio"
+            @click="mode = 'simple'"
+          >
+            <span class="mode-pill-title">简易</span>
+            <span class="mode-pill-sub">flash · 快速概览</span>
+          </button>
+          <button
+            type="button"
+            class="mode-pill"
+            :class="{ active: mode === 'detail' }"
+            :aria-checked="mode === 'detail'"
+            role="radio"
+            @click="mode = 'detail'"
+          >
+            <span class="mode-pill-title">详细</span>
+            <span class="mode-pill-sub">pro · 13 维分析</span>
+          </button>
+        </div>
+      </div>
+
       <Transition name="fade">
         <p v-if="error" class="error-msg">{{ error }}</p>
       </Transition>
@@ -163,13 +192,43 @@
             </svg>
           </div>
           <div class="project-meta">
-            <div class="project-name">{{ p.repo_name }}</div>
+            <div class="project-name-row">
+              <span class="project-name">{{ p.repo_name }}</span>
+              <span
+                class="mode-badge"
+                :class="`mode-badge-${p.analysis_mode || 'detail'}`"
+              >{{ (p.analysis_mode || 'detail') === 'simple' ? '简易' : '详细' }}</span>
+            </div>
             <div class="project-url">{{ p.repo_url }}</div>
           </div>
-          <button class="btn-delete" @click.stop="removeProject(p.id)" :disabled="deleting === p.id">
-            <svg v-if="deleting !== p.id" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-            <span v-else class="btn-delete-spinner"></span>
-          </button>
+          <div class="project-trail" @click.stop>
+            <template v-if="confirmingId === p.id">
+              <button
+                class="btn-confirm btn-confirm-yes"
+                @click.stop="reallyRemove(p.id)"
+                :disabled="deleting === p.id"
+                :title="deleting === p.id ? '删除中…' : '确认删除'"
+              >
+                <span v-if="deleting !== p.id" aria-hidden="true">✓</span>
+                <span v-else class="btn-delete-spinner" aria-hidden="true"></span>
+              </button>
+              <button
+                class="btn-confirm btn-confirm-no"
+                @click.stop="cancelRemove"
+                title="取消"
+              >
+                <span aria-hidden="true">✕</span>
+              </button>
+            </template>
+            <button
+              v-else
+              class="btn-delete"
+              @click.stop="askRemove(p.id)"
+              title="删除"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </button>
+          </div>
         </div>
       </div>
     </section>
@@ -189,6 +248,11 @@ const loading = ref(false)
 const error = ref('')
 const projects = ref([])
 const deleting = ref(null)
+const mode = ref('detail')
+
+// inline-confirm state for delete
+const confirmingId = ref(null)
+let confirmTimer = null
 
 onMounted(async () => {
   if (!auth.user) return
@@ -199,7 +263,22 @@ function isValidUrl(url) {
   return /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+/.test(url.trim())
 }
 
-async function removeProject(id) {
+function askRemove(id) {
+  confirmingId.value = id
+  if (confirmTimer) clearTimeout(confirmTimer)
+  // auto-collapse the confirm chips after 3s of inactivity
+  confirmTimer = setTimeout(() => {
+    if (confirmingId.value === id) confirmingId.value = null
+  }, 3000)
+}
+
+function cancelRemove() {
+  confirmingId.value = null
+  if (confirmTimer) { clearTimeout(confirmTimer); confirmTimer = null }
+}
+
+async function reallyRemove(id) {
+  if (confirmTimer) { clearTimeout(confirmTimer); confirmTimer = null }
   deleting.value = id
   try {
     await deleteProject(id)
@@ -208,6 +287,7 @@ async function removeProject(id) {
     console.error(e)
   } finally {
     deleting.value = null
+    confirmingId.value = null
   }
 }
 
@@ -223,7 +303,7 @@ async function startAnalysis() {
 
   loading.value = true
   try {
-    const result = await analyzeRepo(url)
+    const result = await analyzeRepo(url, mode.value)
     if (result.cached) router.push(`/report/${result.project_id}`)
     else router.push(`/analyze/${result.project_id}`)
   } catch (e) {
@@ -547,6 +627,138 @@ async function startAnalysis() {
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
   display: inline-block;
+}
+
+/* Trail wrapper holds either the trash icon or the inline-confirm chips */
+.project-trail {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Inline-confirm chips (visible whenever they render — no hover gate) */
+.btn-confirm {
+  width: 32px; height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-medium);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.95rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  transition: all var(--duration-fast);
+}
+.btn-confirm:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-confirm-yes {
+  border-color: rgba(255, 82, 82, 0.45);
+  color: var(--neon-coral);
+}
+.btn-confirm-yes:hover:not(:disabled) {
+  background: rgba(255, 82, 82, 0.18);
+  border-color: var(--neon-coral);
+  box-shadow: 0 0 12px rgba(255, 82, 82, 0.25);
+}
+.btn-confirm-no {
+  color: var(--text-secondary);
+}
+.btn-confirm-no:hover {
+  border-color: var(--neon-cyan);
+  color: var(--neon-cyan);
+}
+
+/* Project name row + mode badge */
+.project-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+  flex-wrap: wrap;
+}
+.mode-badge {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-medium);
+  line-height: 1.4;
+}
+.mode-badge-simple {
+  color: var(--neon-lime);
+  border-color: rgba(118, 255, 3, 0.35);
+  background: rgba(118, 255, 3, 0.08);
+}
+.mode-badge-detail {
+  color: var(--neon-magenta);
+  border-color: rgba(224, 64, 251, 0.35);
+  background: var(--neon-magenta-10);
+}
+
+/* ═══════════════ MODE TOGGLE (segmented control) ═══════════════ */
+.mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-4) auto 0;
+  max-width: 600px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.mode-toggle-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.mode-toggle-group {
+  display: inline-flex;
+  padding: 4px;
+  background: rgba(7, 6, 26, 0.55);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-full);
+  gap: 4px;
+}
+.mode-pill {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 18px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--duration-fast);
+  min-width: 132px;
+}
+.mode-pill-title {
+  font-weight: 600;
+  font-size: 0.92rem;
+  letter-spacing: 0.02em;
+}
+.mode-pill-sub {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+}
+.mode-pill:hover { color: var(--text-primary); }
+.mode-pill.active {
+  background: linear-gradient(135deg, rgba(0, 229, 255, 0.18), rgba(224, 64, 251, 0.18));
+  border-color: var(--border-glow);
+  color: var(--text-primary);
+  box-shadow: 0 0 0 1px rgba(0, 229, 255, 0.2), 0 0 16px rgba(0, 229, 255, 0.15);
+}
+.mode-pill.active .mode-pill-sub { color: var(--neon-cyan); }
+@media (max-width: 768px) {
+  .mode-toggle { gap: var(--space-2); }
+  .mode-pill { min-width: 110px; padding: 6px 12px; }
 }
 
 .project-card:hover .project-arrow { color: var(--neon-cyan); transform: translateX(4px); }

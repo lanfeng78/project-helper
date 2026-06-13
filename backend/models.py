@@ -27,6 +27,8 @@ class Project(Base):
     repo_url = Column(String(512), nullable=False)
     repo_name = Column(String(256), nullable=False)
     repo_hash = Column(String(64), nullable=False, index=True, default="")
+    analysis_mode = Column(String(16), default="detail")  # "simple" | "detail"
+    model_used = Column(String(64), default="")
     status = Column(String(20), default="pending")
     progress = Column(Float, default=0.0)
     progress_msg = Column(String(512), default="")
@@ -74,6 +76,20 @@ def init_db():
             # sqlite_sequence 只有在表有过 autoincrement 插入后才存在
             if inspector_after.has_table("sqlite_sequence"):
                 conn.execute(text("DELETE FROM sqlite_sequence WHERE name='projects'"))
+
+    # ── analysis_mode / model_used 增量迁移 ──
+    # 这两列在 v1.2 引入；老库需要 ALTER 增加，create_all 不会改已存在的表。
+    if inspector_after.has_table("projects"):
+        cols = {c["name"] for c in inspector_after.get_columns("projects")}
+        with engine.begin() as conn:
+            if "analysis_mode" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE projects ADD COLUMN analysis_mode VARCHAR(16) DEFAULT 'detail'"
+                ))
+            if "model_used" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE projects ADD COLUMN model_used VARCHAR(64) DEFAULT ''"
+                ))
 
 
 def get_db():

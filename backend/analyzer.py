@@ -4,7 +4,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from config import settings
 
-SYSTEM_PROMPT = """You are an expert software architect who explains code to beginners.
+SYSTEM_PROMPT_DETAIL = """You are an expert software architect who explains code to beginners.
 Your task: analyze codebase text and produce a comprehensive, easy-to-understand report in Chinese.
 Use simple analogies. Assume the reader knows basic programming but nothing about this project.
 
@@ -27,16 +27,52 @@ Output must be valid JSON with these fields (all in Chinese):
 
 IMPORTANT: Return ONLY the JSON object, no markdown fences, no other text."""
 
-def create_llm() -> ChatOpenAI:
+
+SYSTEM_PROMPT_SIMPLE = """You are an expert software architect who explains code to beginners.
+Your task: produce a CONCISE quick-overview of the codebase in Chinese — focus on speed and clarity over depth.
+Use simple analogies. Aim for a report that takes ~30 seconds to read.
+
+Output must be valid JSON with EXACTLY these 7 fields (all in Chinese, keep each field short):
+{
+  "project_name": "项目名称",
+  "one_line": "一句话简介",
+  "overview": "项目概述（150字以内）",
+  "tech_stack": "主要技术栈（一句话列出核心语言/框架）",
+  "directory_structure": "目录结构（精简树形，仅顶层 + 关键二级目录，每行一句话）",
+  "entry_point": "入口文件及启动方式（1-2 句）",
+  "reading_guide": "新手阅读顺序建议（3-5 步）"
+}
+
+IMPORTANT: Return ONLY the JSON object, no markdown fences, no other text. Keep it brief."""
+
+
+def _build_llm(mode: str = "detail") -> ChatOpenAI:
+    """Build a fresh ChatOpenAI per analysis call so mode→model is honored.
+
+    Falls back to settings.deepseek_model when the mode-specific field is empty.
+    """
+    if mode == "simple":
+        model = settings.deepseek_model_simple or settings.deepseek_model
+        max_tokens = 3000
+    else:
+        model = settings.deepseek_model_detail or settings.deepseek_model
+        max_tokens = 8000
     return ChatOpenAI(
-        model=settings.deepseek_model,
+        model=model,
         openai_api_key=settings.deepseek_api_key,
         openai_api_base=settings.deepseek_base_url,
         temperature=0.3,
-        max_tokens=8000,
+        max_tokens=max_tokens,
     )
 
+
+# Back-compat shim: legacy callers (if any) of create_llm()/get_llm() still work.
+def create_llm() -> ChatOpenAI:
+    return _build_llm("detail")
+
+
 ANALYSIS_LLM = None
+
 
 def get_llm() -> ChatOpenAI:
     global ANALYSIS_LLM
@@ -44,18 +80,24 @@ def get_llm() -> ChatOpenAI:
         ANALYSIS_LLM = create_llm()
     return ANALYSIS_LLM
 
-async def analyze_codebase(context_text: str, progress_cb=None) -> dict:
-    """Analyze codebase text and return structured report as dict."""
+
+async def analyze_codebase(context_text: str, mode: str = "detail", progress_cb=None) -> dict:
+    """Analyze codebase text and return structured report as dict.
+
+    mode = "simple" → uses flash model + trimmed context + 7-field prompt (fast, brief).
+    mode = "detail" (default) → uses pro model + full context + 13-field prompt (thorough).
+    """
     if progress_cb:
         progress_cb(0.75, "AI analyzing code structure...")
 
-    llm = get_llm()
-    max_chars = 60000
+    llm = _build_llm(mode)
+    system_prompt = SYSTEM_PROMPT_SIMPLE if mode == "simple" else SYSTEM_PROMPT_DETAIL
+    max_chars = 24000 if mode == "simple" else 60000
     if len(context_text) > max_chars:
         context_text = context_text[:max_chars] + "\n\n[Content truncated due to size]"
 
     messages = [
-        SystemMessage(content=SYSTEM_PROMPT),
+        SystemMessage(content=system_prompt),
         HumanMessage(content=f"Analyze this codebase:\n\n{context_text}")
     ]
 

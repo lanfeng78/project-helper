@@ -7,6 +7,44 @@
           <BackButton />
           <h2>💬 源码问答</h2>
           <span class="qa-project-name"># {{ projectId.slice(0, 8) }}</span>
+          <div class="qa-tools">
+            <button
+              class="qa-tool-btn"
+              @click="onCopyAll"
+              :disabled="streaming || !messages.length"
+              :title="copyTip"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+              </svg>
+              <span>{{ copyTip }}</span>
+            </button>
+            <button
+              class="qa-tool-btn"
+              @click="onExportAll"
+              :disabled="streaming || !messages.length"
+              title="导出对话 .md"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              <span>.md</span>
+            </button>
+            <button
+              class="qa-tool-btn qa-tool-danger"
+              @click="onClear"
+              :disabled="streaming || !messages.length"
+              title="清空对话"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+              </svg>
+            </button>
+          </div>
         </div>
 
         <!-- Messages -->
@@ -81,6 +119,7 @@ import { useRoute } from 'vue-router'
 import { marked } from 'marked'
 import { streamQA, getReport } from '@/api'
 import BackButton from '@/components/BackButton.vue'
+import { copyText, downloadMarkdown } from '@/utils/exporter'
 
 const route = useRoute()
 const projectId = route.params.id
@@ -90,6 +129,8 @@ const streaming = ref(false)
 const thinking = ref(false)
 const streamContent = ref('')
 const msgContainer = ref(null)
+const copyTip = ref('复制')
+let copyTimer = null
 
 const suggestions = [
   "这个项目的入口文件是什么？",
@@ -163,6 +204,35 @@ async function scrollToBottom() {
     msgContainer.value.scrollTop = msgContainer.value.scrollHeight
   }
 }
+
+function formatConversation(msgs) {
+  const head = `# 源码问答 · ${projectId}\n\n_由 Project Helper 导出_\n\n`
+  const body = msgs.map(m => {
+    const tag = m.role === 'user' ? '## 🧑 你' : '## 🤖 AI'
+    return `${tag}\n\n${m.content}\n`
+  }).join('\n---\n\n')
+  return head + body
+}
+
+async function onCopyAll() {
+  if (!messages.value.length) return
+  const ok = await copyText(formatConversation(messages.value))
+  copyTip.value = ok ? '已复制' : '复制失败'
+  if (copyTimer) clearTimeout(copyTimer)
+  copyTimer = setTimeout(() => { copyTip.value = '复制' }, 2000)
+}
+
+function onExportAll() {
+  if (!messages.value.length) return
+  downloadMarkdown(`qa-${projectId.slice(0, 8)}`, formatConversation(messages.value))
+}
+
+function onClear() {
+  if (!messages.value.length) return
+  if (!window.confirm('清空当前对话?此操作不可撤销。')) return
+  messages.value = []
+  streamContent.value = ''
+}
 </script>
 
 <style scoped>
@@ -179,17 +249,64 @@ async function scrollToBottom() {
 .qa-header {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--border-color);
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border-medium);
+  flex-wrap: wrap;
 }
 
-.qa-header h2 { font-size: 1.1rem; flex: 1; }
+.qa-header h2 { font-size: 1.1rem; }
 
 .qa-project-name {
   font-family: var(--font-mono);
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   color: var(--text-muted);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qa-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.qa-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  background: linear-gradient(135deg, rgba(0, 229, 255, 0.05), rgba(224, 64, 251, 0.05));
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: all 180ms ease;
+  min-height: 30px;
+}
+.qa-tool-btn:hover:not(:disabled) {
+  color: var(--neon-cyan);
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 0 1px rgba(0, 229, 255, 0.18);
+  background: linear-gradient(135deg, rgba(0, 229, 255, 0.10), rgba(224, 64, 251, 0.06));
+}
+.qa-tool-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.qa-tool-btn:focus-visible {
+  outline: 2px solid var(--neon-cyan);
+  outline-offset: 2px;
+}
+.qa-tool-danger:hover:not(:disabled) {
+  color: var(--neon-coral);
+  border-color: var(--neon-coral);
+  box-shadow: 0 0 0 1px rgba(255, 82, 82, 0.25);
+  background: rgba(255, 82, 82, 0.08);
 }
 
 /* Messages */

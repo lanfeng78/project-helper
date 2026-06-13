@@ -27,11 +27,11 @@ export async function authedFetch(url, options = {}) {
   return res
 }
 
-export async function analyzeRepo(repoUrl) {
+export async function analyzeRepo(repoUrl, mode = 'detail') {
   const res = await authedFetch(`${BASE}/analyze`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ repo_url: repoUrl })
+    body: JSON.stringify({ repo_url: repoUrl, mode })
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }))
